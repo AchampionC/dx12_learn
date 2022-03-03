@@ -19,7 +19,7 @@
 #include <windowsx.h>
 #include <comdef.h>
 #include "d3dx12.h"
-
+#include "GameTime.h"
 
 using namespace Microsoft::WRL;
 
@@ -85,6 +85,8 @@ ComPtr<ID3D12Resource> swapChainBuffer[2];
 ComPtr<IDXGISwapChain> swapChain;
 ComPtr<ID3D12DescriptorHeap> rtvHeap;
 ComPtr<ID3D12DescriptorHeap> dsvHeap;
+
+GameTime gt;
 
 D3D12_VIEWPORT viewPort;
 D3D12_RECT scissorRect;
@@ -201,12 +203,43 @@ void Draw()
 	FlushCmdQueue();
 }
 
+void CalculateFrameState()
+{
+	static int frameCnt = 0;	//总帧数
+	static float timeElapsed = 0.0f;	//流逝的时间
+	frameCnt++;	//每帧++，经过一秒后其即为FPS值
+	//调试模块
+	/*std::wstring text = std::to_wstring(gt.TotalTime());
+	std::wstring windowText = text;
+	SetWindowText(mhMainWnd, windowText.c_str());*/
+	//判断模块
+	if ((gt.TotalTime() - timeElapsed) >= 1.0f)	//一旦>=0，说明刚好过一秒
+	{
+		float fps = (float)frameCnt;//每秒多少帧
+		float mspf = 1000.0f / fps;	//每帧多少毫秒
+
+		std::wstring fpsStr = std::to_wstring(fps);//转为宽字符
+		std::wstring mspfStr = std::to_wstring(mspf);
+		//将帧数据显示在窗口上
+		std::wstring windowText = L"D3D12Init    fps:" + fpsStr + L"    " + L"mspf" + mspfStr;
+		SetWindowText(mhMainWnd, windowText.c_str());
+
+		//为计算下一组帧数值而重置
+		frameCnt = 0;
+		timeElapsed += 1.0f;
+	}
+
+}
+
+
 int Run()
 {
 	//消息循环
 	//定义消息结构体
 	MSG msg = { 0 };
 	//如果GetMessage函数不等于0，说明没有接受到WM_QUIT
+	gt.Reset();
+
 	while (msg.message != WM_QUIT)
 	{
 		//如果等于-1，说明GetMessage函数出错了，弹出错误框
@@ -218,7 +251,16 @@ int Run()
 		//如果等于其他值，说明接收到了消息
 		else
 		{
-			Draw();
+			gt.Tick();
+			if (!gt.IsStoped())
+			{
+				CalculateFrameState();
+				Draw();
+			}
+			else
+			{
+				Sleep(100);
+			}
 		}
 	}
 	return (int)msg.wParam;
