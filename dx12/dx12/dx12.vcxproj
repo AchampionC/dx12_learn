@@ -147,11 +147,15 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="D3D12App.cpp" />
     <ClCompile Include="D3DX12Initialize.cpp" />
     <ClCompile Include="GameTime.cpp" />
+    <ClCompile Include="ToolFunc.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="D3D12App.h" />
     <ClInclude Include="GameTime.h" />
+    <ClInclude Include="ToolFunc.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
