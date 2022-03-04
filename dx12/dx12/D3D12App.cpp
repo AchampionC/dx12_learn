@@ -36,6 +36,7 @@ int D3D12App::Run()
 			if (!gt.IsStoped())
 			{
 				CalculateFrameState();
+				Update();
 				Draw();
 			}
 			else
@@ -252,6 +253,10 @@ void D3D12App::CreateDSV()
 	assert(swapChain);
 	assert(cmdAllocator);
 
+	// Flush before changing any resources.
+	FlushCmdQueue();
+
+	ThrowIfFailed(cmdList->Reset(cmdAllocator.Get(), nullptr));
 
 	//在CPU中创建好深度模板数据资源
 	D3D12_RESOURCE_DESC dsvResourceDesc;
@@ -264,7 +269,7 @@ void D3D12App::CreateDSV()
 	dsvResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;	//指定纹理布局（这里不指定）
 	dsvResourceDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;	//深度模板资源的Flag
 	dsvResourceDesc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;	//24位深度，8位模板,还有个无类型的格式DXGI_FORMAT_R24G8_TYPELESS也可以使用
-	dsvResourceDesc.SampleDesc.Count = 4;	//多重采样数量
+	dsvResourceDesc.SampleDesc.Count = 1;	//多重采样数量
 	dsvResourceDesc.SampleDesc.Quality = 0;	//多重采样质量
 	CD3DX12_CLEAR_VALUE optClear;	//清除资源的优化值，提高清除操作的执行速度（CreateCommittedResource函数中传入）
 	optClear.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;//24位深度，8位模板,还有个无类型的格式DXGI_FORMAT_R24G8_TYPELESS也可以使用
@@ -279,16 +284,26 @@ void D3D12App::CreateDSV()
 		&optClear,	//上面定义的优化值指针
 		IID_PPV_ARGS(&depthStencilBuffer)));	//返回深度模板资源
 		//创建DSV(必须填充DSV属性结构体，和创建RTV不同，RTV是通过句柄)
-		//D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc;
-		//dsvDesc.Flags = D3D12_DSV_FLAG_NONE;
-		//dsvDesc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
-		//dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
-		//dsvDesc.Texture2D.MipSlice = 0;
+	D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc;
+	dsvDesc.Flags = D3D12_DSV_FLAG_NONE;
+	dsvDesc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+	dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+	dsvDesc.Texture2D.MipSlice = 0;
 
 	d3dDevice->CreateDepthStencilView(depthStencilBuffer.Get(),
 		nullptr,	//D3D12_DEPTH_STENCIL_VIEW_DESC类型指针，可填&dsvDesc（见上注释代码），
 							//由于在创建深度模板资源时已经定义深度模板数据属性，所以这里可以指定为空指针
 		dsvHeap->GetCPUDescriptorHandleForHeapStart());	//DSV句柄
+
+	cmdList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(depthStencilBuffer.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_DEPTH_WRITE));
+
+	// Execute the resize commands.
+	ThrowIfFailed(cmdList->Close());
+	ID3D12CommandList* cmdsLists[] = { cmdList.Get() };
+	cmdQueue->ExecuteCommandLists(_countof(cmdsLists), cmdsLists);
+
+	// Wait until resize is complete.
+	FlushCmdQueue();
 }
 
 void D3D12App::CreateViewPortAndScissorRect()

@@ -20,8 +20,9 @@
 #include <sstream>
 #include <windowsx.h>
 #include <comdef.h>
+#include "MathHelper.h"
 
-//using namespace Microsoft::WRL;
+using namespace Microsoft::WRL;
 
 //AnsiToWString函数（转换成宽字符类型的字符串，wstring）
 //在Windows平台上，我们应该都使用wstring和wchar_t，处理方式是在字符串前+L
@@ -46,7 +47,16 @@ public:
 	int LineNumber = -1;
 };
 
+class ToolFunc
+{
+public:
+	ToolFunc() {};
+	~ToolFunc() {};
+	static ComPtr<ID3DBlob> CompileShader(const std::wstring& fileName, const D3D_SHADER_MACRO* defines, const std::string& entryPoint, const std::string& target);
 
+	static ComPtr<ID3D12Resource> CreateDefaultBuffer(ComPtr<ID3D12Device> d3dDevice, ComPtr<ID3D12GraphicsCommandList> cmdList, UINT64 byteSize, const void* initData, ComPtr<ID3D12Resource>& uploadBuffer);
+
+};
 
 
 //宏定义ThrowIfFailed

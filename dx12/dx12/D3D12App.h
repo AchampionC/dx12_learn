@@ -14,10 +14,11 @@ protected:
 
 public:
 	int Run();
-	bool Init(HINSTANCE hInstance, int nShowCmd);
+	virtual bool Init(HINSTANCE hInstance, int nShowCmd);
 	bool InitWindow(HINSTANCE hInstance, int nShowCmd);
 	bool InitDirect3D();
 	virtual void Draw() = 0;
+	virtual void Update() = 0;
 
 	void CreateDevice();
 	void CreateFence();
@@ -48,7 +49,7 @@ protected:
 	ComPtr<IDXGISwapChain> swapChain;
 	ComPtr<ID3D12DescriptorHeap> rtvHeap;
 	ComPtr<ID3D12DescriptorHeap> dsvHeap;
-
+	                                                  
 	D3D12_VIEWPORT viewPort;
 	D3D12_RECT scissorRect;
 
