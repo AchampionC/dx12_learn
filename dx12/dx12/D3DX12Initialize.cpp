@@ -187,15 +187,15 @@ void D3D12InitApp::OnMouseMove(WPARAM btnState, int x, int y)
 	if ((btnState & MK_LBUTTON) != 0) // 如果按键在按下状态
 	{
 		// 将鼠标的移动距离换算成弧度, 0.25为调节阈值
-		float dx = XMConvertToRadians(static_cast<float>(mLastMousePos.x - x) * 0.25f);
-		float dy = XMConvertToRadians(static_cast<float>(mLastMousePos.y - y) * 0.25f);
+		float dx = XMConvertToRadians(static_cast<float>(x - mLastMousePos.x) * 0.25f);
+		float dy = XMConvertToRadians(static_cast<float>(y - mLastMousePos.y) * 0.25f);
 		
 		// 计算鼠标没有松开前的累计弧度
 		mTheta += dx;
 		mPhi += dy;
 
 		// 限制角度phi的范围(0.1, Pi - 0.1)
-		mTheta = MathHelper::Clamp(mTheta, 0.1f, 3.1416f - 0.1f);
+		mPhi = MathHelper::Clamp(mPhi, 0.1f, 3.1416f - 0.1f);
 	}
 	else if((btnState & MK_RBUTTON) != 0)
 	{
