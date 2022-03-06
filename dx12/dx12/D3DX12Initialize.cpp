@@ -75,14 +75,20 @@ private:
 class D3D12InitApp : public D3D12App
 {
 public:
-	D3D12InitApp() {};
+	D3D12InitApp(HINSTANCE hInstance);
 	~D3D12InitApp() {};
 
 	virtual bool Init(HINSTANCE hInstance, int nShowCmd) override;
 
 private:
+	virtual void OnMouseDown(WPARAM btnState, int x, int y) override;
+	virtual void OnMouseUp(WPARAM btnState, int x, int y) override;
+	virtual void OnMouseMove(WPARAM btnState, int x, int y) override;
+
+private:
 	virtual void Draw() override;
 	virtual void Update() override;
+	virtual void OnResize() override;
 
 	void BuildDescriptorHeaps();
 	void BuildConstantBuffers();
@@ -117,8 +123,9 @@ private:
 
 	ComPtr<ID3D12PipelineState> PSO = nullptr;
 
-	XMFLOAT4X4 mWorld = MathHelper::Identity4x4();
 
+	XMFLOAT4X4 mWorld = MathHelper::Identity4x4();
+	XMFLOAT4X4 mProj = MathHelper::Identity4x4();
 
 	std::array<std::uint16_t, 36> indices =
 	{
@@ -147,6 +154,12 @@ private:
 		4, 3, 7
 	};
 
+	float mTheta = 1.5f * XM_PI;
+	float mPhi = XM_PIDIV4;
+	float mRadius = 5.0f;
+
+	POINT mLastMousePos;
+
 };
 
 UINT CalcConstantBufferByteSize(UINT byteSize)
@@ -155,6 +168,51 @@ UINT CalcConstantBufferByteSize(UINT byteSize)
 }
 
 
+
+void D3D12InitApp::OnMouseDown(WPARAM btnState, int x, int y)
+{
+	mLastMousePos.x = x; //在属于当前线程的指定窗口里，设置鼠标捕获
+	mLastMousePos.y = y; //在属于当前线程的指定窗口里，设置鼠标捕获
+
+	SetCapture(mhMainWnd); //在属于当前线程的指定窗口里，设置鼠标捕获
+}
+
+void D3D12InitApp::OnMouseUp(WPARAM btnState, int x, int y)
+{
+	ReleaseCapture(); // 按键抬起时释放鼠标捕获
+}
+
+void D3D12InitApp::OnMouseMove(WPARAM btnState, int x, int y)
+{
+	if ((btnState & MK_LBUTTON) != 0) // 如果按键在按下状态
+	{
+		// 将鼠标的移动距离换算成弧度, 0.25为调节阈值
+		float dx = XMConvertToRadians(static_cast<float>(mLastMousePos.x - x) * 0.25f);
+		float dy = XMConvertToRadians(static_cast<float>(mLastMousePos.y - y) * 0.25f);
+		
+		// 计算鼠标没有松开前的累计弧度
+		mTheta += dx;
+		mPhi += dy;
+
+		// 限制角度phi的范围(0.1, Pi - 0.1)
+		mTheta = MathHelper::Clamp(mTheta, 0.1f, 3.1416f - 0.1f);
+	}
+	else if((btnState & MK_RBUTTON) != 0)
+	{
+		// 将鼠标的移动距离换算成缩放大小, 0.005为调节阈值
+		float dx = 0.005f * static_cast<float>(x - mLastMousePos.x);
+		float dy = 0.005f * static_cast<float>(y - mLastMousePos.y);
+		// 根据鼠标输入更新摄像机可视范围半径
+		mRadius += dx - dy;
+		// 限制可视范围半径
+		mRadius = MathHelper::Clamp(mRadius, 0.1f, 20.0f);
+
+	}
+
+	//将当前鼠标坐标赋值给“上一次鼠标坐标”，为下一次鼠标操作提供先前值
+	mLastMousePos.x = x;
+	mLastMousePos.y = y;
+}
 
 void D3D12InitApp::Draw()
 {
@@ -219,6 +277,12 @@ void D3D12InitApp::Draw()
 	FlushCmdQueue();
 }
 
+
+D3D12InitApp::D3D12InitApp(HINSTANCE hInstance)
+:D3D12App(hInstance)
+{
+
+}
 
 bool D3D12InitApp::Init(HINSTANCE hInstance, int nShowCmd)
 {
@@ -382,9 +446,22 @@ void D3D12InitApp::Update()
 {
 	ObjectConstants objConstants;
 	// 构建观察矩阵
-	float x = 0.0f;
-	float y = 0.0f;
-	float z = 5.0f;
+	//float x = 5.0f;
+	//float y = 5.0f;
+	//float z = 5.0f;
+	//float r = 5.0f;
+
+	//x *= sinf(gt.TotalTime());
+
+	//z = sqrt(r * r - x * x);
+
+	//mTheta = 1.5f * XM_PI;
+	//mPhi = XM_PIDIV4;
+	//mRadius = 10.0f;
+
+	float y = mRadius * cosf(mPhi);
+	float x = mRadius * sinf(mPhi) * cosf(mTheta);
+	float z = mRadius * sinf(mPhi) * sinf(mTheta);
 
 	XMVECTOR pos = XMVectorSet(x, y, z, 1.0f);
 	XMVECTOR target = XMVectorZero();
@@ -392,7 +469,7 @@ void D3D12InitApp::Update()
 	XMMATRIX v = XMMatrixLookAtLH(pos, target, up);
 
 	// 构建投影矩阵
-	XMMATRIX p = XMMatrixPerspectiveFovLH(0.25f * 3.1416f, 1280.0f / 720.0f, 1.0f, 1000.0f);
+	XMMATRIX p = XMMatrixPerspectiveFovLH(0.25f * 3.1416f, static_cast<float>(mClientWidth) / mClientHeight, 1.0f, 1000.0f);
 
 	// 构建世界矩阵
 	XMMATRIX w = XMLoadFloat4x4(&mWorld);
@@ -405,6 +482,15 @@ void D3D12InitApp::Update()
 
 	// 将数据拷贝至GPU缓存
 	objCB->CopyData(0, objConstants);
+}
+
+void D3D12InitApp::OnResize()
+{
+	D3D12App::OnResize();
+
+	//构建投影矩阵
+	XMMATRIX p = XMMatrixPerspectiveFovLH(0.25f * 3.1416f, static_cast<float>(mClientWidth) / mClientHeight, 1.0f, 1000.0f);
+	XMStoreFloat4x4(&mProj, p);
 }
 
 D3D12_VERTEX_BUFFER_VIEW D3D12InitApp::GetVbv()
@@ -435,7 +521,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE prevInstance, PSTR cmdLine, in
 
 	try
 	{
-		D3D12InitApp theApp;
+		D3D12InitApp theApp(hInstance);
 		if (!theApp.Init(hInstance, nShowCmd))
 			return 0;
 

@@ -9,7 +9,7 @@ using namespace Microsoft::WRL;
 class D3D12App
 {
 protected:
-	D3D12App();
+	D3D12App(HINSTANCE hInstance);
 	virtual ~D3D12App();
 
 public:
@@ -17,8 +17,11 @@ public:
 	virtual bool Init(HINSTANCE hInstance, int nShowCmd);
 	bool InitWindow(HINSTANCE hInstance, int nShowCmd);
 	bool InitDirect3D();
+
+	static D3D12App* GetApp();
 	virtual void Draw() = 0;
 	virtual void Update() = 0;
+
 
 	void CreateDevice();
 	void CreateFence();
@@ -34,7 +37,26 @@ public:
 	void FlushCmdQueue();
 	void CalculateFrameState();
 
+	LRESULT MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
 protected:
+
+	virtual void OnResize();
+	// Convenience overrides for handling mouse input.
+	virtual void OnMouseDown(WPARAM btnState, int x, int y) { }
+	virtual void OnMouseUp(WPARAM btnState, int x, int y) { }
+	virtual void OnMouseMove(WPARAM btnState, int x, int y) { }
+protected:
+
+	static D3D12App* mApp;
+	HINSTANCE mhAppInst = nullptr;
+
+	bool      mAppPaused = false;  // is the application paused?
+	bool      mMinimized = false;  // is the application minimized?
+	bool      mMaximized = false;  // is the application maximized?
+	bool      mResizing = false;   // are the resize bars being dragged?
+	bool      mFullscreenState = false;// fullscreen enabled
+
 	HWND mhMainWnd = 0;
 
 	//指针接口和变量声明
@@ -62,4 +84,7 @@ protected:
 
 	UINT mCurrentBackBuffer = 0;
 	int mCurrentFence = 0;	//初始CPU上的围栏点为0
+
+	int mClientWidth = 800;
+	int mClientHeight = 600;
 };

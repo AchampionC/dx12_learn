@@ -3,9 +3,45 @@ HWND mhMainWnd = 0;	//某个窗口的句柄，ShowWindow和UpdateWindow函数均要调用此句柄
 //窗口过程函数的声明,HWND是主窗口句柄
 LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lparam);
 
-D3D12App::D3D12App()
+void D3D12App::OnResize()
 {
+	assert(d3dDevice);
+	assert(swapChain);
+	assert(cmdAllocator);
+	FlushCmdQueue(); // 改变资源前先同步
 
+	ThrowIfFailed(cmdList->Reset(cmdAllocator.Get(), nullptr));
+
+	// 释放之前的资源, 为我们重新创建做好准备
+	for (int i = 0; i < 2; i++)
+	{
+		swapChainBuffer[i].Reset();
+	}
+
+	depthStencilBuffer.Reset();
+
+	// 重新调整后台缓冲区资源的大小
+	ThrowIfFailed(swapChain->ResizeBuffers(2, 
+	mClientWidth, 
+	mClientHeight,
+	DXGI_FORMAT_R8G8B8A8_UNORM,
+	DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH));
+
+	//后台缓冲区索引置零
+	mCurrentBackBuffer = 0;
+
+	CreateRTV();
+	CreateDSV();
+	CreateViewPortAndScissorRect();
+}
+
+D3D12App* D3D12App::mApp = nullptr;
+
+D3D12App::D3D12App(HINSTANCE hInstance)
+:mhAppInst(hInstance)
+{
+	assert(mApp == nullptr);
+	mApp = this;
 }
 
 D3D12App::~D3D12App()
@@ -54,14 +90,14 @@ bool D3D12App::Init(HINSTANCE hInstance, int nShowCmd)
 	{
 		return false;
 	}
-	else if (!InitDirect3D())
+	if (!InitDirect3D())
 	{
 		return false;
 	}
-	else
-	{
-		return true;
-	}
+	
+	OnResize();
+
+	return true;
 }
 
 bool D3D12App::InitWindow(HINSTANCE hInstance, int nShowCmd)
@@ -129,11 +165,14 @@ bool D3D12App::InitDirect3D()
 	CreateCommandObject();
 	CreateSwapChain();
 	CreateDescriptorHeap();
-	CreateRTV();
-	CreateDSV();
-	CreateViewPortAndScissorRect();
+	OnResize();
 
 	return true;
+}
+
+D3D12App* D3D12App::GetApp()
+{
+	return mApp;
 }
 
 void D3D12App::CreateDevice()
@@ -249,22 +288,22 @@ void D3D12App::CreateRTV()
 
 void D3D12App::CreateDSV()
 {
-	assert(d3dDevice);
-	assert(swapChain);
-	assert(cmdAllocator);
+	//assert(d3dDevice);
+	//assert(swapChain);
+	//assert(cmdAllocator);
 
-	// Flush before changing any resources.
-	FlushCmdQueue();
+	//// Flush before changing any resources.
+	//FlushCmdQueue();
 
-	ThrowIfFailed(cmdList->Reset(cmdAllocator.Get(), nullptr));
+	//ThrowIfFailed(cmdList->Reset(cmdAllocator.Get(), nullptr));
 
 	//在CPU中创建好深度模板数据资源
 	D3D12_RESOURCE_DESC dsvResourceDesc;
 	dsvResourceDesc.Alignment = 0;	//指定对齐
 	dsvResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;	//指定资源维度（类型）为TEXTURE2D
 	dsvResourceDesc.DepthOrArraySize = 1;	//纹理深度为1
-	dsvResourceDesc.Width = 1280;	//资源宽
-	dsvResourceDesc.Height = 720;	//资源高
+	dsvResourceDesc.Width = mClientWidth;	//资源宽
+	dsvResourceDesc.Height = mClientHeight;	//资源高
 	dsvResourceDesc.MipLevels = 1;	//MIPMAP层级数量
 	dsvResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;	//指定纹理布局（这里不指定）
 	dsvResourceDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;	//深度模板资源的Flag
@@ -311,16 +350,14 @@ void D3D12App::CreateViewPortAndScissorRect()
 	//视口设置
 	viewPort.TopLeftX = 0;
 	viewPort.TopLeftY = 0;
-	viewPort.Width = 1280;
-	viewPort.Height = 720;
+	viewPort.Width = static_cast<float>(mClientWidth);
+	viewPort.Height = static_cast<float>(mClientHeight);
 	viewPort.MaxDepth = 1.0f;
 	viewPort.MinDepth = 0.0f;
 	//裁剪矩形设置（矩形外的像素都将被剔除）
 	//前两个为左上点坐标，后两个为右下点坐标
-	scissorRect.left = 0;
-	scissorRect.top = 0;
-	scissorRect.right = 1280;
-	scissorRect.bottom = 720;
+	scissorRect = {0, 0, mClientWidth, mClientHeight};
+
 }
 
 void D3D12App::FlushCmdQueue()
@@ -364,19 +401,89 @@ void D3D12App::CalculateFrameState()
 	}
 }
 
+LRESULT D3D12App::MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+	// 消息处理
+	switch (msg)
+	{
+		// 鼠标按键按下时的触发(左中右)
+		case WM_LBUTTONDOWN:
+		case WM_MBUTTONDOWN:
+		case WM_RBUTTONDOWN:
+			// wParam 位输入的虚拟键代码, lParam为系统反馈的光标信息
+			OnMouseDown(wParam, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+			return 0;
+		// 鼠标按键抬起时候的触发(左中右)
+		case WM_LBUTTONUP:
+		case WM_MBUTTONUP:
+		case WM_RBUTTONUP:
+			OnMouseUp(wParam, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+			return 0;
+		// 鼠标移动的触发
+		case WM_MOUSEMOVE:
+			OnMouseMove(wParam, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+			return 0;
+
+		case WM_SIZE:
+			mClientWidth = LOWORD(lParam);
+			mClientHeight = HIWORD(lParam);
+			if (d3dDevice)
+			{
+				//如果最小化,则暂停游戏，调整最小化和最大化状态
+				if (wParam == SIZE_MINIMIZED)
+				{
+					mAppPaused = true;
+					mMinimized = true;
+					mMaximized = false;
+				}
+				else if (wParam == SIZE_MAXIMIZED)
+				{
+					mAppPaused = false;
+					mMinimized = false;
+					mMaximized = true;
+					OnResize();
+				}
+				else if (wParam == SIZE_RESTORED)
+				{
+					if (mMinimized)
+					{
+						mAppPaused = false;
+						mMinimized = false;
+						OnResize();
+					}
+
+					else if (mMaximized)
+					{
+						mAppPaused = false;
+						mMaximized = false;
+						OnResize();
+					}
+
+					else if (mResizing)
+					{
+
+					}
+					else
+					{
+						OnResize();
+					}
+				}
+			}
+
+			return 0;
+		// 当窗口被销毁时, 终止循环
+		case WM_DESTROY:
+			PostQuitMessage(0); // 终止消息循环, 并发出WM_QUIT消息
+			return 0;
+		default:
+			break;
+	}
+	// 将上面没有处理的消息转发给默认的窗口过程
+	return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
 //窗口过程函数
 LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-	//消息处理
-	switch (msg)
-	{
-		//当窗口被销毁时，终止消息循环
-	case WM_DESTROY:
-		PostQuitMessage(0);	//终止消息循环，并发出WM_QUIT消息
-		return 0;
-	default:
-		break;
-	}
-	//将上面没有处理的消息转发给默认的窗口过程
-	return DefWindowProc(hwnd, msg, wParam, lParam);
+	return D3D12App::GetApp()->MsgProc(hwnd, msg, wParam, lParam);
 }
