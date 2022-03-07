@@ -18,8 +18,16 @@ struct Vertex
 struct ObjectConstants
 {
 	//初始化物体空间变换到裁剪空间矩阵，Identity4x4()是单位矩阵，需要包含MathHelper头文件
-	XMFLOAT4X4 worldViewProj = MathHelper::Identity4x4();
+	XMFLOAT4X4 world = MathHelper::Identity4x4();
 };
+
+struct PassConstants
+{
+	XMFLOAT4X4 viewProj = MathHelper::Identity4x4();
+};
+
+
+
 
 template<typename T>
 class UploadBufferResource
@@ -72,6 +80,9 @@ private:
 
 };
 
+std::unique_ptr<UploadBufferResource<ObjectConstants>> objCB = nullptr;
+std::unique_ptr<UploadBufferResource<PassConstants>> passCB = nullptr;
+
 class D3D12InitApp : public D3D12App
 {
 public:
@@ -100,6 +111,7 @@ private:
 	D3D12_INDEX_BUFFER_VIEW GetIbv();
 
 	UINT objConstSize;
+	UINT passConstSize;
 	ComPtr<ID3D12DescriptorHeap> cbvHeap;
 	ComPtr<ID3D12RootSignature> rootSignature = nullptr;
 	std::vector<D3D12_INPUT_ELEMENT_DESC> inputLayoutDesc;
@@ -253,8 +265,17 @@ void D3D12InitApp::Draw()
 	// 将图元拓扑类型传入流水线
 	cmdList->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	// 设置根描述符表
+	int objCbvIndex = 0;
+	auto handle = CD3DX12_GPU_DESCRIPTOR_HANDLE(cbvHeap->GetGPUDescriptorHandleForHeapStart());
+	handle.Offset(objCbvIndex, cbv_srv_uavDescriptorSize);
 	cmdList->SetGraphicsRootDescriptorTable(0,// 根参数的起始索引
-	cbvHeap->GetGPUDescriptorHandleForHeapStart());
+	handle);
+
+	int passCbvIndex = 1;
+	handle = CD3DX12_GPU_DESCRIPTOR_HANDLE(cbvHeap->GetGPUDescriptorHandleForHeapStart());
+	handle.Offset(passCbvIndex, cbv_srv_uavDescriptorSize);
+	cmdList->SetGraphicsRootDescriptorTable(1,
+		handle);
 
 	//绘制顶点
 	cmdList->DrawIndexedInstanced((UINT)indices.size(), // 每个实例要绘制的索引数
@@ -314,7 +335,7 @@ void D3D12InitApp::BuildDescriptorHeaps()
 	D3D12_DESCRIPTOR_HEAP_DESC cbHeapDesc;
 	cbHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 	cbHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-	cbHeapDesc.NumDescriptors = 1;
+	cbHeapDesc.NumDescriptors = 2;
 	cbHeapDesc.NodeMask = 0;
 	ThrowIfFailed(d3dDevice->CreateDescriptorHeap(&cbHeapDesc, IID_PPV_ARGS(&cbvHeap)));
 }
@@ -322,36 +343,59 @@ void D3D12InitApp::BuildDescriptorHeaps()
 void D3D12InitApp::BuildConstantBuffers()
 {
 	// 定义并获得物体的常量缓冲区, 然后得到其首地址
+	objConstSize = CalcConstantBufferByteSize(sizeof(ObjectConstants));
 
 	// elementcount 为1（1个子物体常量缓冲区）, isConstantBuffer为true(为常量缓冲区）
 	objCB = std::make_unique<UploadBufferResource<ObjectConstants>>(d3dDevice.Get(), 1, true);
-	objConstSize = CalcConstantBufferByteSize(sizeof(ObjectConstants));
 	// 获得常量缓冲区的首地址
-	D3D12_GPU_VIRTUAL_ADDRESS address;
-	address = objCB->Resource()->GetGPUVirtualAddress();
-	// 通过常量缓冲区元素偏移值计算最终的元素地址
-	int cbElementIndex = 0; // 常量缓冲区元素下标
-	address += cbElementIndex * objConstSize;
+	D3D12_GPU_VIRTUAL_ADDRESS obj_Address;
+	obj_Address = objCB->Resource()->GetGPUVirtualAddress();
+	int objCbElementIndex = 0;
+	obj_Address += objCbElementIndex * objConstSize;
+	int heapIndex = 0;
+	auto handle = CD3DX12_CPU_DESCRIPTOR_HANDLE(cbvHeap->GetCPUDescriptorHandleForHeapStart());
+	handle.Offset(heapIndex, cbv_srv_uavDescriptorSize);
 	//创建CBV描述符
-	D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc;
-	cbvDesc.BufferLocation = address;
-	cbvDesc.SizeInBytes = objConstSize;
-	d3dDevice->CreateConstantBufferView(&cbvDesc, cbvHeap->GetCPUDescriptorHandleForHeapStart());
+	D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc0;
+	cbvDesc0.BufferLocation = obj_Address;
+	cbvDesc0.SizeInBytes = objConstSize;
+	d3dDevice->CreateConstantBufferView(&cbvDesc0, handle);
+
+	passConstSize = CalcConstantBufferByteSize(sizeof(PassConstants));
+	passCB = std::make_unique<UploadBufferResource<PassConstants>>(d3dDevice.Get(), 1, true);
+	D3D12_GPU_VIRTUAL_ADDRESS passcb_Address;
+	passcb_Address = passCB->Resource()->GetGPUVirtualAddress();
+	int	passCbElementIndex = 0;
+	passcb_Address += passCbElementIndex * passConstSize;
+	heapIndex = 1;
+	handle = CD3DX12_CPU_DESCRIPTOR_HANDLE(cbvHeap->GetCPUDescriptorHandleForHeapStart());
+	handle.Offset(heapIndex, cbv_srv_uavDescriptorSize);
+	// 创建cbv描述符
+	D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc1;
+	cbvDesc1.BufferLocation = passcb_Address;
+	cbvDesc1.SizeInBytes = passConstSize;
+	d3dDevice->CreateConstantBufferView(&cbvDesc1, handle);
 }
 
 void D3D12InitApp::BuildRootSignature()
 {
 	// 根参数可以是描述符表、根描述符、根常量
-	CD3DX12_ROOT_PARAMETER slotRootParameter[1];
+	CD3DX12_ROOT_PARAMETER slotRootParameter[2];
 	// 创建由单个CBV所组成的描述符表
-	CD3DX12_DESCRIPTOR_RANGE cbvTable;
-	cbvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, //描述符类型
+	CD3DX12_DESCRIPTOR_RANGE cbvTable0;
+	cbvTable0.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, //描述符类型
 	1, //描述符数量
-	0);
+	0); // 描述符所绑定的寄存器号
 
-	slotRootParameter[0].InitAsDescriptorTable(1, &cbvTable);
+	CD3DX12_DESCRIPTOR_RANGE cbvTable1;
+	cbvTable1.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV,
+		1,
+		1);// 描述符所绑定的寄存器号
+
+	slotRootParameter[0].InitAsDescriptorTable(1, &cbvTable0);
+	slotRootParameter[1].InitAsDescriptorTable(1, &cbvTable1);
 	// 根签名由一组根参数构成
-	CD3DX12_ROOT_SIGNATURE_DESC rootSig(1, //根参数的数量
+	CD3DX12_ROOT_SIGNATURE_DESC rootSig(2, //根参数的数量
 	slotRootParameter, // 根参数指针
 	0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
@@ -445,6 +489,8 @@ void D3D12InitApp::BuildPSO()
 void D3D12InitApp::Update()
 {
 	ObjectConstants objConstants;
+	PassConstants passConstants;
+
 	// 构建观察矩阵
 	//float x = 5.0f;
 	//float y = 5.0f;
@@ -469,16 +515,22 @@ void D3D12InitApp::Update()
 	XMMATRIX v = XMMatrixLookAtLH(pos, target, up);
 
 	// 构建投影矩阵
-	XMMATRIX p = XMMatrixPerspectiveFovLH(0.25f * 3.1416f, static_cast<float>(mClientWidth) / mClientHeight, 1.0f, 1000.0f);
+	//XMMATRIX p = XMMatrixPerspectiveFovLH(0.25f * 3.1416f, static_cast<float>(mClientWidth) / mClientHeight, 1.0f, 1000.0f);
 
 	// 构建世界矩阵
 	XMMATRIX w = XMLoadFloat4x4(&mWorld);
+	w *= XMMatrixTranslation(2.0f, 0.0f, 0.0f);
+
+	// 拿到投影矩阵
+	XMMATRIX p = XMLoadFloat4x4(&mProj);
 
 	// 矩阵计算
-	XMMATRIX WVP_Matrix = v * p;
+	XMMATRIX VP_Matrix = v * p;
+	XMStoreFloat4x4(&passConstants.viewProj, XMMatrixTranspose(VP_Matrix));
+	passCB->CopyData(0, passConstants);
 	
 	// XMMATRIX 赋值给XMFLOAT4x4
-	XMStoreFloat4x4(&objConstants.worldViewProj, XMMatrixTranspose(WVP_Matrix));
+	XMStoreFloat4x4(&objConstants.world, XMMatrixTranspose(w));
 
 	// 将数据拷贝至GPU缓存
 	objCB->CopyData(0, objConstants);
