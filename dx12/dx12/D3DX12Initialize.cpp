@@ -3,7 +3,8 @@
 #include "d3dx12.h"
 #include "GameTime.h"
 #include "D3D12App.h"
-
+#include "ProceduralGeometry.h"
+#include "DirectXPackedVector.h"
 using namespace Microsoft::WRL;
 using namespace DirectX;
 
@@ -16,6 +17,12 @@ struct VPosData
 struct VColorData
 {
 	XMFLOAT4 Color;
+};
+
+struct Vertex
+{
+	DirectX::XMFLOAT3 Pos;
+	DirectX::XMFLOAT4 Color;
 };
 
 //单个物体的常量数据
@@ -126,20 +133,29 @@ private:
 	ComPtr<ID3DBlob> vsBytecode = nullptr;
 	ComPtr<ID3DBlob> psBytecode = nullptr;
 
-	UINT vPosBufferByteSize;
-	UINT vColorBufferByteSize;
-	UINT ibByteSize;
+	//UINT vPosBufferByteSize;
+	//UINT vColorBufferByteSize;
+	//UINT ibByteSize;
+	UINT vertexBufferByteSize;
+	UINT IndexBufferByteSize;
 
+	//ComPtr<ID3DBlob> vertexBufferCPU = nullptr;
+	//ComPtr<ID3DBlob> vPosBufferCPU = nullptr;
+	//ComPtr<ID3DBlob> indexBufferCPU = nullptr;
 	ComPtr<ID3DBlob> vertexBufferCPU = nullptr;
-	ComPtr<ID3DBlob> vPosBufferCPU = nullptr;
 	ComPtr<ID3DBlob> indexBufferCPU = nullptr;
 
-	ComPtr<ID3D12Resource> vPosBufferGpu = nullptr;
-	ComPtr<ID3D12Resource> vColorBufferGpu = nullptr;
-	ComPtr<ID3D12Resource> indexBufferGpu = nullptr;
 
-	ComPtr<ID3D12Resource> vPosBufferUploader = nullptr;
-	ComPtr<ID3D12Resource> vColorBufferUploader = nullptr;
+	//ComPtr<ID3D12Resource> vPosBufferGpu = nullptr;
+	//ComPtr<ID3D12Resource> vColorBufferGpu = nullptr;
+	//ComPtr<ID3D12Resource> indexBufferGpu = nullptr;
+	ComPtr<ID3D12Resource> vertexBufferGPU = nullptr;
+	ComPtr<ID3D12Resource> indexBufferGPU = nullptr;
+
+	//ComPtr<ID3D12Resource> vPosBufferUploader = nullptr;
+	//ComPtr<ID3D12Resource> vColorBufferUploader = nullptr;
+	//ComPtr<ID3D12Resource> indexBufferUploader = nullptr;
+	ComPtr<ID3D12Resource> vertexBufferUploader = nullptr;
 	ComPtr<ID3D12Resource> indexBufferUploader = nullptr;
 
 	ComPtr<ID3D12PipelineState> PSO = nullptr;
@@ -180,6 +196,16 @@ private:
 	float mRadius = 5.0f;
 
 	POINT mLastMousePos;
+
+	// 绘制子物体的三个属性
+	struct SubmeshGeometry
+	{
+		UINT indexCount;
+		UINT startIndexLocation;
+		UINT baseVertexLocation;
+	};
+
+	std::unordered_map<std::string, SubmeshGeometry> DrawArgs;
 
 };
 
@@ -270,10 +296,10 @@ void D3D12InitApp::Draw()
 	cmdList->SetGraphicsRootSignature(rootSignature.Get());
 	// 设置顶点缓冲区
 	cmdList->IASetVertexBuffers(0, 1, &GetVbv());
-	cmdList->IASetVertexBuffers(1, 1, &GetVColorBufferView());
+	//cmdList->IASetVertexBuffers(1, 1, &GetVColorBufferView());
 	cmdList->IASetIndexBuffer(&GetIbv());
 	// 将图元拓扑类型传入流水线
-	cmdList->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
 	// 设置根描述符表
 	int objCbvIndex = 0;
 	auto handle = CD3DX12_GPU_DESCRIPTOR_HANDLE(cbvHeap->GetGPUDescriptorHandleForHeapStart());
@@ -287,12 +313,34 @@ void D3D12InitApp::Draw()
 	cmdList->SetGraphicsRootDescriptorTable(1,
 		handle);
 
-	//绘制顶点
-	cmdList->DrawIndexedInstanced((UINT)indices.size(), // 每个实例要绘制的索引数
-	1, // 实例化个数
-	0, // 起始索引位置
-	0, // 子物体起始索引在全局索引中的位置
-	0); // 实例化高级技术, 暂时设置为0
+	////绘制顶点
+	//cmdList->DrawIndexedInstanced((UINT)indices.size(), // 每个实例要绘制的索引数
+	//1, // 实例化个数
+	//0, // 起始索引位置
+	//0, // 子物体起始索引在全局索引中的位置
+	//0); // 实例化高级技术, 暂时设置为0
+
+
+	cmdList->DrawIndexedInstanced(DrawArgs["box"].indexCount, //每个实例要绘制的索引数
+		1,	//实例化个数
+		DrawArgs["box"].startIndexLocation,	//起始索引位置
+		DrawArgs["box"].baseVertexLocation,	//子物体起始索引在全局索引中的位置
+		0);	//实例化的高级技术，暂时设置为0
+	cmdList->DrawIndexedInstanced(DrawArgs["grid"].indexCount, //每个实例要绘制的索引数
+		1,	//实例化个数
+		DrawArgs["grid"].startIndexLocation,	//起始索引位置
+		DrawArgs["grid"].baseVertexLocation,	//子物体起始索引在全局索引中的位置
+		0);	//实例化的高级技术，暂时设置为0
+	cmdList->DrawIndexedInstanced(DrawArgs["sphere"].indexCount, //每个实例要绘制的索引数
+		1,	//实例化个数
+		DrawArgs["sphere"].startIndexLocation,	//起始索引位置
+		DrawArgs["sphere"].baseVertexLocation,	//子物体起始索引在全局索引中的位置
+		0);	//实例化的高级技术，暂时设置为0
+	cmdList->DrawIndexedInstanced(DrawArgs["cylinder"].indexCount, //每个实例要绘制的索引数
+		1,	//实例化个数
+		DrawArgs["cylinder"].startIndexLocation,	//起始索引位置
+		DrawArgs["cylinder"].baseVertexLocation,	//子物体起始索引在全局索引中的位置
+		0);	//实例化的高级技术，暂时设置为0
 
 	cmdList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(swapChainBuffer[ref_mCurrentBackBuffer].Get(),
 		D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT));//从渲染目标到呈现
@@ -437,13 +485,13 @@ void D3D12InitApp::BuildShadersAndInputLayout()
 	inputLayoutDesc = 
 	{
 		{"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-		{"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}
-
+		{"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}
 	};
 }
 
 void D3D12InitApp::BuildGeometry()
 {
+#if 0
 	//实例化顶点结构体并填充
 	std::array<VPosData, 8> verticesPos =
 	{
@@ -486,6 +534,98 @@ void D3D12InitApp::BuildGeometry()
 	vPosBufferGpu = ToolFunc::CreateDefaultBuffer(d3dDevice.Get(), cmdList.Get(), vPosBufferByteSize, verticesPos.data(), vPosBufferUploader);
 	vColorBufferGpu = ToolFunc::CreateDefaultBuffer(d3dDevice.Get(), cmdList.Get(), vColorBufferByteSize, verticesColor.data(), vColorBufferUploader);
 	indexBufferGpu = ToolFunc::CreateDefaultBuffer(d3dDevice.Get(), cmdList.Get(), ibByteSize, indices.data(), indexBufferUploader);
+#endif 
+	ProceduralGeometry proceGeo;
+	ProceduralGeometry::MeshData box = proceGeo.CreateBox(1.5f, 0.5f, 1.5f, 3);
+	ProceduralGeometry::MeshData grid = proceGeo.CreateGrid(20.0f, 30.0f, 60, 40);
+	ProceduralGeometry::MeshData sphere = proceGeo.CreateSphere(0.5f, 20, 20);
+	ProceduralGeometry::MeshData cylinder = proceGeo.CreateCylinder(0.5f, 0.3f, 3.0f, 20, 20);
+
+	//计算单个几何体顶点在总顶点数组中的偏移量,顺序为：box、grid、sphere、cylinder
+	UINT boxVertexOffset = 0;
+	UINT gridVertexOffset = (UINT)box.Vertices.size();
+	UINT sphereVertexOffset = (UINT)grid.Vertices.size() + gridVertexOffset;
+	UINT cylinderVertexOffset = (UINT)sphere.Vertices.size() + sphereVertexOffset;
+
+	//计算单个几何体索引在总索引数组中的偏移量,顺序为：box、grid、sphere、cylinder
+	UINT boxIndexOffset = 0;
+	UINT gridIndexOffset = (UINT)box.Indices32.size();
+	UINT sphereIndexOffset = (UINT)grid.Indices32.size() + gridIndexOffset;
+	UINT cylinderIndexOffset = (UINT)sphere.Indices32.size() + sphereIndexOffset;
+
+
+	SubmeshGeometry boxSubmesh;
+	boxSubmesh.indexCount = (UINT)box.Indices32.size();
+	boxSubmesh.baseVertexLocation = boxVertexOffset;
+	boxSubmesh.startIndexLocation = boxIndexOffset;
+
+	SubmeshGeometry gridSubmesh;
+	gridSubmesh.indexCount = (UINT)grid.Indices32.size();
+	gridSubmesh.baseVertexLocation = gridVertexOffset;
+	gridSubmesh.startIndexLocation = gridIndexOffset;
+
+	SubmeshGeometry sphereSubmesh;
+	sphereSubmesh.indexCount = (UINT)sphere.Indices32.size();
+	sphereSubmesh.baseVertexLocation = sphereVertexOffset;
+	sphereSubmesh.startIndexLocation = sphereIndexOffset;
+
+	SubmeshGeometry cylinderSubmesh;
+	cylinderSubmesh.indexCount = (UINT)cylinder.Indices32.size();
+	cylinderSubmesh.baseVertexLocation = cylinderVertexOffset;
+	cylinderSubmesh.startIndexLocation = cylinderIndexOffset;
+
+	size_t totalVertexCount = box.Vertices.size() + grid.Vertices.size() + sphere.Vertices.size() + cylinder.Vertices.size();
+	std::vector<Vertex> vertices(totalVertexCount);
+	int k = 0;
+	for (int i = 0; i < box.Vertices.size(); i++, k ++ )
+	{
+		vertices[k].Pos = box.Vertices[i].Position;
+		vertices[k].Color = XMFLOAT4(DirectX::Colors::Yellow);
+	}
+
+	for (int i = 0; i < grid.Vertices.size(); i ++, k++)
+	{
+		vertices[k].Pos = grid.Vertices[i].Position;
+		vertices[k].Color = XMFLOAT4(DirectX::Colors::Brown);
+	}
+
+	for (int i = 0; i < sphere.Vertices.size(); i++, k ++ )
+	{
+		vertices[k].Pos = sphere.Vertices[i].Position;
+		vertices[k].Color = XMFLOAT4(DirectX::Colors::Green);
+	}
+
+	for (int i = 0; i < cylinder.Vertices.size(); i ++, k++)
+	{
+		vertices[k].Pos = cylinder.Vertices[i].Position;
+		vertices[k].Color = XMFLOAT4(DirectX::Colors::Blue);
+	}
+	std::vector<std::uint16_t> indices;
+	indices.insert(indices.end(), box.GetIndices16().begin(), box.GetIndices16().end());
+	indices.insert(indices.end(), grid.GetIndices16().begin(), grid.GetIndices16().end());
+	indices.insert(indices.end(), sphere.GetIndices16().begin(), sphere.GetIndices16().end());
+	indices.insert(indices.end(), cylinder.GetIndices16().begin(), cylinder.GetIndices16().end());
+
+	// 计算vertices 和 indices 两个缓存的各自大小
+	const UINT vbByteSize = (UINT) vertices.size() * sizeof(Vertex);
+	const UINT ibByteSize = (UINT) indices.size() * sizeof(std::uint16_t);
+
+	vertexBufferByteSize = vbByteSize;
+	IndexBufferByteSize = ibByteSize;
+	
+	// 复制内存中的顶点索引数据至GPU缓存
+	ThrowIfFailed(D3DCreateBlob(vbByteSize, &vertexBufferCPU));
+	ThrowIfFailed(D3DCreateBlob(ibByteSize, &indexBufferCPU));
+	CopyMemory(vertexBufferCPU->GetBufferPointer(), vertices.data(), vbByteSize);
+	CopyMemory(indexBufferCPU->GetBufferPointer(), indices.data(), ibByteSize);
+	vertexBufferGPU = ToolFunc::CreateDefaultBuffer(d3dDevice.Get(), cmdList.Get(), vbByteSize, vertices.data(), vertexBufferUploader);
+	indexBufferGPU = ToolFunc::CreateDefaultBuffer(d3dDevice.Get(), cmdList.Get(), ibByteSize, indices.data(), indexBufferUploader);
+
+
+	DrawArgs["box"] = boxSubmesh;
+	DrawArgs["grid"] = gridSubmesh;
+	DrawArgs["sphere"] = sphereSubmesh;
+	DrawArgs["cylinder"] = cylinderSubmesh;
 
 }
 
@@ -501,7 +641,7 @@ void D3D12InitApp::BuildPSO()
 	psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
 	psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
 	psoDesc.SampleMask = UINT_MAX;	//0xffffffff,全部采样，没有遮罩
-	psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+	psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
 	psoDesc.NumRenderTargets = 1;
 	psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;	//归一化的无符号整型
 	psoDesc.DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
@@ -545,7 +685,7 @@ void D3D12InitApp::Update()
 
 	// 构建世界矩阵
 	XMMATRIX w = XMLoadFloat4x4(&mWorld);
-	w *= XMMatrixTranslation(2.0f, 0.0f, 0.0f);
+	//w *= XMMatrixTranslation(2.0f, 0.0f, 0.0f);
 
 	// 拿到投影矩阵
 	XMMATRIX p = XMLoadFloat4x4(&mProj);
@@ -574,9 +714,9 @@ void D3D12InitApp::OnResize()
 D3D12_VERTEX_BUFFER_VIEW D3D12InitApp::GetVbv()
 {
 	D3D12_VERTEX_BUFFER_VIEW vbv;
-	vbv.BufferLocation = vPosBufferGpu->GetGPUVirtualAddress();
-	vbv.SizeInBytes = vPosBufferByteSize;
-	vbv.StrideInBytes = sizeof(VPosData);
+	vbv.BufferLocation = vertexBufferGPU->GetGPUVirtualAddress();
+	vbv.SizeInBytes = vertexBufferByteSize;
+	vbv.StrideInBytes = sizeof(Vertex);
 
 	return vbv;
 }
@@ -584,9 +724,12 @@ D3D12_VERTEX_BUFFER_VIEW D3D12InitApp::GetVbv()
 D3D12_VERTEX_BUFFER_VIEW D3D12InitApp::GetVColorBufferView()
 {
 	D3D12_VERTEX_BUFFER_VIEW vColorBufferView;
-	vColorBufferView.BufferLocation = vColorBufferGpu->GetGPUVirtualAddress();
-	vColorBufferView.SizeInBytes = vColorBufferByteSize;
-	vColorBufferView.StrideInBytes = sizeof(VColorData);
+	//vColorBufferView.BufferLocation = vColorBufferGpu->GetGPUVirtualAddress();
+	//vColorBufferView.SizeInBytes = vColorBufferByteSize;
+	//vColorBufferView.StrideInBytes = sizeof(VColorData);
+	vColorBufferView.BufferLocation = 0;
+	vColorBufferView.SizeInBytes = 0;
+	vColorBufferView.StrideInBytes = 0;
 
 	return vColorBufferView;
 }
@@ -594,9 +737,9 @@ D3D12_VERTEX_BUFFER_VIEW D3D12InitApp::GetVColorBufferView()
 D3D12_INDEX_BUFFER_VIEW D3D12InitApp::GetIbv()
 {
 	D3D12_INDEX_BUFFER_VIEW ibv;
-	ibv.BufferLocation = indexBufferGpu->GetGPUVirtualAddress();
+	ibv.BufferLocation = indexBufferGPU->GetGPUVirtualAddress();
 	ibv.Format = DXGI_FORMAT_R16_UINT;
-	ibv.SizeInBytes = ibByteSize;
+	ibv.SizeInBytes = IndexBufferByteSize;
 
 	return ibv;
 }
