@@ -91,3 +91,9 @@ Microsoft::WRL::ComPtr<ID3D12Resource> ToolFunc::CreateDefaultBuffer(ComPtr<ID3D
 	return defaultBuffer;
 
 }
+
+UINT ToolFunc::CalcConstantBufferByteSize(UINT byteSize)
+{
+		return (byteSize + 255) & ~255;
+}
+

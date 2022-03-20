@@ -5,8 +5,13 @@
 #include "D3D12App.h"
 #include "ProceduralGeometry.h"
 #include "DirectXPackedVector.h"
+#include "UploadBufferResource.h"
+#include "FrameResources.h"
+
 using namespace Microsoft::WRL;
 using namespace DirectX;
+
+int frameResourcesCount = 3;
 
 //定义顶点结构体
 struct VPosData
@@ -23,72 +28,6 @@ struct Vertex
 {
 	DirectX::XMFLOAT3 Pos;
 	DirectX::XMFLOAT4 Color;
-};
-
-//单个物体的常量数据
-struct ObjectConstants
-{
-	//初始化物体空间变换到裁剪空间矩阵，Identity4x4()是单位矩阵，需要包含MathHelper头文件
-	XMFLOAT4X4 world = MathHelper::Identity4x4();
-};
-
-struct PassConstants
-{
-	XMFLOAT4X4 viewProj = MathHelper::Identity4x4();
-};
-
-
-
-
-template<typename T>
-class UploadBufferResource
-{
-public:
-	UploadBufferResource(ComPtr<ID3D12Device> d3dDevice, UINT elementCount, bool isConstantBuffer) : mIsConstantBuffer(isConstantBuffer)
-	{
-		elementByteSize = sizeof(T);//如果不是常量缓冲区，则直接计算缓存大小
-
-		if (isConstantBuffer)
-			elementByteSize = CalcConstantBufferByteSize(sizeof(T));//如果是常量缓冲区，则以256的倍数计算缓存大小
-		//创建上传堆和资源
-		ThrowIfFailed(d3dDevice->CreateCommittedResource(&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
-			D3D12_HEAP_FLAG_NONE,
-			&CD3DX12_RESOURCE_DESC::Buffer(elementByteSize * elementCount),
-			D3D12_RESOURCE_STATE_GENERIC_READ,
-			nullptr,
-			IID_PPV_ARGS(&uploadBuffer)));
-		//返回欲更新资源的指针
-		ThrowIfFailed(uploadBuffer->Map(0,//子资源索引，对于缓冲区来说，他的子资源就是自己
-			nullptr,//对整个资源进行映射
-			reinterpret_cast<void**>(&mappedData)));//返回待映射资源数据的目标内存块	
-	}
-
-	~UploadBufferResource()
-	{
-		if (uploadBuffer != nullptr)
-			uploadBuffer->Unmap(0, nullptr);//取消映射
-
-		mappedData = nullptr;//释放映射内存
-	}
-
-	UploadBufferResource(const UploadBufferResource& rhs) = delete;
-	UploadBufferResource& operator = (const UploadBufferResource& rhs) = delete;
-
-	ID3D12Resource* Resource() const
-	{
-		return uploadBuffer.Get();
-	}
-
-	void CopyData(int elementIndex, const T& data)
-	{
-		memcpy(&mappedData[elementIndex * elementByteSize], &data, sizeof(T));
-	}
-private:
-	UINT elementByteSize;
-	ComPtr<ID3D12Resource> uploadBuffer;
-	BYTE* mappedData = nullptr;
-	bool mIsConstantBuffer = false;
-
 };
 
 std::unique_ptr<UploadBufferResource<ObjectConstants>> objCB = nullptr;
@@ -113,6 +52,8 @@ struct RenderItem
 	UINT startIndexLocation = 0;
 	UINT baseVertexLocation = 0;
 
+	UINT numFramesDirty = 3;
+
 };
 
 class D3D12InitApp : public D3D12App
@@ -135,16 +76,23 @@ private:
 
 	void BuildDescriptorHeaps();
 	void BuildRenderItem();
+	void BuildFrameResources();
 	void BuildConstantBuffers();
 	void BuildRootSignature();
 	void BuildShadersAndInputLayout();
 	void BuildGeometry();
 	void BuildPSO();
 	void DrawRenderItem();
+	void UpdateObjectCBs();
+	void UpdatePassCBs();
 	D3D12_VERTEX_BUFFER_VIEW GetVbv();
 	D3D12_VERTEX_BUFFER_VIEW GetVColorBufferView();
 	D3D12_INDEX_BUFFER_VIEW GetIbv();
 
+	std::vector<std::unique_ptr<FrameResources>> FrameResourcesArray;
+	int currFrameResourcesIndex = 0; 
+	UINT currentFence = 0;
+	FrameResources* currFrameResources = nullptr;
 	std::vector<std::unique_ptr<RenderItem>> allRitems;
 	UINT objConstSize;
 	UINT passConstSize;
@@ -233,10 +181,7 @@ private:
 
 };
 
-UINT CalcConstantBufferByteSize(UINT byteSize)
-{
-	return (byteSize + 255) & ~255;
-}
+
 
 
 
@@ -287,10 +232,14 @@ void D3D12InitApp::OnMouseMove(WPARAM btnState, int x, int y)
 
 void D3D12InitApp::Draw()
 {
-	ThrowIfFailed(cmdAllocator->Reset());//重复使用记录命令的相关内存
+	//ThrowIfFailed(cmdAllocator->Reset());//重复使用记录命令的相关内存
 	//ThrowIfFailed(cmdList->Reset(cmdAllocator.Get(), nullptr));//复用命令列表及其内存
 
-	ThrowIfFailed(cmdList->Reset(cmdAllocator.Get(), PSO.Get()));
+	//ThrowIfFailed(cmdList->Reset(cmdAllocator.Get(), PSO.Get()));
+	auto currCmdAllocator = currFrameResources->cmdAllocator;
+	ThrowIfFailed(currCmdAllocator->Reset());//重复使用记录命令的相关内存
+	ThrowIfFailed(cmdList->Reset(currCmdAllocator.Get(), PSO.Get()));//复用命令列表及其内存
+
 	UINT& ref_mCurrentBackBuffer = mCurrentBackBuffer;
 	cmdList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(swapChainBuffer[ref_mCurrentBackBuffer].Get(),//转换资源为后台缓冲区资源
 		D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET));//从呈现到渲染目标转换
@@ -331,7 +280,7 @@ void D3D12InitApp::Draw()
 	//cmdList->SetGraphicsRootDescriptorTable(0,// 根参数的起始索引
 	//handle);
 
-	int passCbvIndex = (int)allRitems.size();
+	int passCbvIndex = (int)allRitems.size() * frameResourcesCount + currFrameResourcesIndex;
 	auto passcbvhandle = CD3DX12_GPU_DESCRIPTOR_HANDLE(cbvHeap->GetGPUDescriptorHandleForHeapStart());
 	passcbvhandle.Offset(passCbvIndex, cbv_srv_uavDescriptorSize);
 	cmdList->SetGraphicsRootDescriptorTable(1,
@@ -378,7 +327,9 @@ void D3D12InitApp::Draw()
 	ThrowIfFailed(swapChain->Present(0, 0));
 	ref_mCurrentBackBuffer = (ref_mCurrentBackBuffer + 1) % 2;
 
-	FlushCmdQueue();
+
+	currFrameResources->fenceCPU = ++currentFence;
+	cmdQueue->Signal(fence.Get(), currentFence);
 }
 
 
@@ -395,12 +346,11 @@ bool D3D12InitApp::Init(HINSTANCE hInstance, int nShowCmd)
 
 	ThrowIfFailed(cmdList->Reset(cmdAllocator.Get(), nullptr));
 	BuildDescriptorHeaps();
-
-
 	BuildRootSignature();
 	BuildShadersAndInputLayout();
 	BuildGeometry();
 	BuildRenderItem();
+	BuildFrameResources();
 	BuildConstantBuffers();
 	BuildPSO();
 
@@ -415,7 +365,7 @@ bool D3D12InitApp::Init(HINSTANCE hInstance, int nShowCmd)
 
 void D3D12InitApp::BuildDescriptorHeaps()
 {
-	objConstSize = CalcConstantBufferByteSize(sizeof(ObjectConstants));
+	objConstSize = ToolFunc::CalcConstantBufferByteSize(sizeof(ObjectConstants));
 	//创建CBV堆
 
 	D3D12_DESCRIPTOR_HEAP_DESC cbHeapDesc;
@@ -496,6 +446,14 @@ void D3D12InitApp::BuildRenderItem()
 	}
 }
 
+void D3D12InitApp::BuildFrameResources()
+{
+	for (int i = 0; i < frameResourcesCount; i ++ )
+	{
+		FrameResourcesArray.push_back(std::make_unique<FrameResources>(d3dDevice.Get(), 1, (UINT)allRitems.size()));
+	}
+}
+
 void D3D12InitApp::BuildConstantBuffers()
 {
 #if 0
@@ -534,50 +492,55 @@ void D3D12InitApp::BuildConstantBuffers()
 	d3dDevice->CreateConstantBufferView(&cbvDesc1, handle);
 #endif
 	UINT objectCount = (UINT)allRitems.size();//物体总个数（包括实例）
-	UINT objConstSize = CalcConstantBufferByteSize(sizeof(ObjectConstants));
-	UINT passConstSize = CalcConstantBufferByteSize(sizeof(PassConstants));
+	UINT objConstSize = ToolFunc::CalcConstantBufferByteSize(sizeof(ObjectConstants));
+	UINT passConstSize = ToolFunc::CalcConstantBufferByteSize(sizeof(PassConstants));
 	//创建CBV堆
 	D3D12_DESCRIPTOR_HEAP_DESC cbHeapDesc;
 	cbHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 	cbHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-	cbHeapDesc.NumDescriptors = objectCount + 1;//此处一个堆中包含(几何体个数（包含实例）+1)个CBV
+	cbHeapDesc.NumDescriptors = (objectCount + 1) * frameResourcesCount;//此处一个堆中包含(几何体个数（包含实例）+1)个CBV
 	cbHeapDesc.NodeMask = 0;
 	ThrowIfFailed(d3dDevice->CreateDescriptorHeap(&cbHeapDesc, IID_PPV_ARGS(&cbvHeap)));
 
 	//elementCount为objectCount,22（22个子物体常量缓冲元素），isConstantBuffer为ture（是常量缓冲区）
 	objCB = std::make_unique<UploadBufferResource<ObjectConstants>>(d3dDevice.Get(), objectCount, true);
 	//获得常量缓冲区首地址
-	for (int i = 0; i < objectCount; i++)
+	for (int frameIndex = 0; frameIndex < frameResourcesCount; frameIndex ++)
 	{
-		D3D12_GPU_VIRTUAL_ADDRESS objCB_Address;
-		objCB_Address = objCB->Resource()->GetGPUVirtualAddress();
-		int objCbElementIndex = i;	//常量缓冲区子物体个数（子缓冲区个数）下标
-		objCB_Address += objCbElementIndex * objConstSize;//子物体在常量缓冲区中的地址
-		int heapIndex = i;	//CBV堆中的CBV元素索引
-		auto handle = CD3DX12_CPU_DESCRIPTOR_HANDLE(cbvHeap->GetCPUDescriptorHandleForHeapStart());//获得CBV堆首地址
-		handle.Offset(heapIndex, cbv_srv_uavDescriptorSize);	//CBV句柄（CBV堆中的CBV元素地址）
-		//创建CBV描述符
-		D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc;
-		cbvDesc.BufferLocation = objCB_Address;
-		cbvDesc.SizeInBytes = objConstSize;
-		d3dDevice->CreateConstantBufferView(&cbvDesc, handle);
+		for (int i = 0; i < objectCount; i++)
+		{
+			D3D12_GPU_VIRTUAL_ADDRESS objCB_Address;
+			objCB_Address = FrameResourcesArray[frameIndex]->objCB->Resource()->GetGPUVirtualAddress();
+			objCB_Address += i * objConstSize;//子物体在常量缓冲区中的地址
+			int heapIndex = objectCount * frameIndex + i;	//CBV堆中的CBV元素索引
+			auto handle = CD3DX12_CPU_DESCRIPTOR_HANDLE(cbvHeap->GetCPUDescriptorHandleForHeapStart());//获得CBV堆首地址
+			handle.Offset(heapIndex, cbv_srv_uavDescriptorSize);	//CBV句柄（CBV堆中的CBV元素地址）
+			//创建CBV描述符
+			D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc;
+			cbvDesc.BufferLocation = objCB_Address;
+			cbvDesc.SizeInBytes = objConstSize;
+			d3dDevice->CreateConstantBufferView(&cbvDesc, handle);
+		}
 	}
 
 	//创建过程常量缓冲区描述符
 	passCB = std::make_unique<UploadBufferResource<PassConstants>>(d3dDevice.Get(), 1, true);
 	//获得常量缓冲区首地址
-	D3D12_GPU_VIRTUAL_ADDRESS passCB_Address;
-	passCB_Address = passCB->Resource()->GetGPUVirtualAddress();
-	int passCbElementIndex = 0;
-	passCB_Address += passCbElementIndex * passConstSize;
-	int heapIndex = objectCount;
-	auto handle = CD3DX12_CPU_DESCRIPTOR_HANDLE(cbvHeap->GetCPUDescriptorHandleForHeapStart());
-	handle.Offset(heapIndex, cbv_srv_uavDescriptorSize);
-	//创建CBV描述符
-	D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc;
-	cbvDesc.BufferLocation = passCB_Address;
-	cbvDesc.SizeInBytes = passConstSize;
-	d3dDevice->CreateConstantBufferView(&cbvDesc, handle);
+	for (int frameIndex = 0; frameIndex < frameResourcesCount; frameIndex++)
+	{
+		D3D12_GPU_VIRTUAL_ADDRESS passCB_Address;
+		passCB_Address = passCB->Resource()->GetGPUVirtualAddress();
+		int passCbElementIndex = 0;
+		passCB_Address += passCbElementIndex * passConstSize;
+		int heapIndex = objectCount * frameResourcesCount + frameIndex;
+		auto handle = CD3DX12_CPU_DESCRIPTOR_HANDLE(cbvHeap->GetCPUDescriptorHandleForHeapStart());
+		handle.Offset(heapIndex, cbv_srv_uavDescriptorSize);
+		//创建CBV描述符
+		D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc;
+		cbvDesc.BufferLocation = passCB_Address;
+		cbvDesc.SizeInBytes = passConstSize;
+		d3dDevice->CreateConstantBufferView(&cbvDesc, handle);
+	}
 }
 
 void D3D12InitApp::BuildRootSignature()
@@ -814,7 +777,7 @@ void D3D12InitApp::DrawRenderItem()
 		cmdList->IASetPrimitiveTopology(ritem->primitiveType);
 
 		//设置根描述符表
-		UINT objCbvIndex = ritem->objCBIndex;
+		UINT objCbvIndex = currFrameResourcesIndex * (UINT)allRitems.size() + ritem->objCBIndex;
 		auto handle = CD3DX12_GPU_DESCRIPTOR_HANDLE(cbvHeap->GetGPUDescriptorHandleForHeapStart());
 		handle.Offset(objCbvIndex, cbv_srv_uavDescriptorSize);
 		cmdList->SetGraphicsRootDescriptorTable(0, //根参数的起始索引
@@ -829,8 +792,51 @@ void D3D12InitApp::DrawRenderItem()
 	}
 }
 
+void D3D12InitApp::UpdateObjectCBs()
+{
+	ObjectConstants objConstants;
+	PassConstants passConstants;
+	for (auto& e : allRitems)
+	{
+		if (e->numFramesDirty > 0)
+		{
+			mWorld = e->world;
+			XMMATRIX w = XMLoadFloat4x4(&mWorld);
+			XMStoreFloat4x4(&objConstants.world, XMMatrixTranspose(w));
+			// 将数据拷贝至GPU缓存
+			currFrameResources->objCB->CopyData(e->objCBIndex, objConstants);
+
+			e->numFramesDirty -- ;
+		}
+	}
+}
+
+void D3D12InitApp::UpdatePassCBs()
+{
+
+	ObjectConstants objConstants;
+	PassConstants passConstants;
+
+	float y = mRadius * cosf(mPhi);
+	float x = mRadius * sinf(mPhi) * cosf(mTheta);
+	float z = mRadius * sinf(mPhi) * sinf(mTheta);
+
+	XMVECTOR pos = XMVectorSet(x, y, z, 1.0f);
+	XMVECTOR target = XMVectorZero();
+	XMVECTOR up = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+	XMMATRIX v = XMMatrixLookAtLH(pos, target, up);
+
+	XMMATRIX p = XMLoadFloat4x4(&mProj);
+
+	// 矩阵计算
+	XMMATRIX VP_Matrix = v * p;
+	XMStoreFloat4x4(&passConstants.viewProj, XMMatrixTranspose(VP_Matrix));
+	passCB->CopyData(0, passConstants);
+}
+
 void D3D12InitApp::Update()
 {
+#if 0
 	ObjectConstants objConstants;
 	PassConstants passConstants;
 
@@ -889,6 +895,25 @@ void D3D12InitApp::Update()
 
 	//// 将数据拷贝至GPU缓存
 	//objCB->CopyData(0, objConstants);
+	
+	#endif 
+
+
+	// 每帧遍历一个帧资源(多帧的话就是环形遍历)
+	currFrameResourcesIndex = (currFrameResourcesIndex + 1) % frameResourcesCount;
+	currFrameResources = FrameResourcesArray[currFrameResourcesIndex].get();
+
+	// 如果GPU端围栏值小于CPU端围栏值, 即CPU速度快于GPU, 则令CPU等待
+	if (currFrameResources->fenceCPU != 0 && fence->GetCompletedValue() < currFrameResources->fenceCPU)
+	{
+		HANDLE eventHandle = CreateEvent(nullptr, false, false, L"FenceSetDone");
+		ThrowIfFailed(fence->SetEventOnCompletion(currFrameResources->fenceCPU, eventHandle));
+		WaitForSingleObject(eventHandle, INFINITE);
+		CloseHandle(eventHandle);
+	}
+
+	UpdateObjectCBs();
+	UpdatePassCBs();
 }
 
 void D3D12InitApp::OnResize()

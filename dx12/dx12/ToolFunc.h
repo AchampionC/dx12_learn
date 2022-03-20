@@ -56,7 +56,10 @@ public:
 
 	static ComPtr<ID3D12Resource> CreateDefaultBuffer(ComPtr<ID3D12Device> d3dDevice, ComPtr<ID3D12GraphicsCommandList> cmdList, UINT64 byteSize, const void* initData, ComPtr<ID3D12Resource>& uploadBuffer);
 
+	static UINT CalcConstantBufferByteSize(UINT byteSize);
+
 };
+
 
 
 //∫Í∂®“ÂThrowIfFailed
